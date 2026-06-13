@@ -4,6 +4,7 @@ import ResultCard from '@/components/ResultCard';
 import PieChart from '@/components/PieChart';
 import BarChart from '@/components/BarChart';
 import ScheduleTable from '@/components/ScheduleTable';
+import PrepaymentSimulator from '@/components/PrepaymentSimulator';
 import { useLoanStore } from '@/store/loanStore';
 
 export default function Home() {
@@ -29,6 +30,8 @@ export default function Home() {
                 <BarChart />
               </div>
             )}
+
+            {hasResult && <PrepaymentSimulator />}
 
             {hasResult && <ScheduleTable />}
           </div>

@@ -4,6 +4,10 @@ import type {
   YearlySummary,
   CalculationResult,
   RepaymentMethod,
+  PrepaymentEntry,
+  PrepaymentResult,
+  PrepaymentStrategyResult,
+  PrepaymentStrategy,
 } from '@/types/loan';
 import { wanToYuan } from './format';
 
@@ -195,4 +199,231 @@ export const calculateLoan = (params: LoanParams): CalculationResult | null => {
   }
 
   return result;
+};
+
+const calcSingleLoanWithPrepayments = (
+  principal: number,
+  annualRatePercent: number,
+  years: number,
+  method: RepaymentMethod,
+  prepayments: { month: number; amount: number }[],
+  strategy: PrepaymentStrategy,
+): { schedule: MonthlyPayment[]; totalPayment: number; totalInterest: number; newMonthlyPayment: number } => {
+  if (principal <= 0 || annualRatePercent <= 0 || years <= 0) {
+    return { schedule: [], totalPayment: 0, totalInterest: 0, newMonthlyPayment: 0 };
+  }
+
+  const monthlyRate = annualRatePercent / 100 / 12;
+  const totalMonths = years * 12;
+  const schedule: MonthlyPayment[] = [];
+  let remainingPrincipal = principal;
+  let totalPayment = 0;
+
+  const prepaymentMap = new Map<number, number>();
+  for (const p of prepayments) {
+    if (p.month > 0 && p.month < totalMonths && p.amount > 0) {
+      prepaymentMap.set(p.month, (prepaymentMap.get(p.month) || 0) + p.amount);
+    }
+  }
+
+  let currentMonthlyPayment = 0;
+  let currentFixedPrincipal = 0;
+  let reducePaymentNewMonthly = 0;
+
+  if (method === 'equal-principal-interest') {
+    currentMonthlyPayment =
+      (principal * monthlyRate * Math.pow(1 + monthlyRate, totalMonths)) /
+      (Math.pow(1 + monthlyRate, totalMonths) - 1);
+  } else {
+    currentFixedPrincipal = principal / totalMonths;
+  }
+
+  const originalFirstPayment =
+    method === 'equal-principal-interest'
+      ? currentMonthlyPayment
+      : currentFixedPrincipal + principal * monthlyRate;
+
+  for (let i = 1; i <= totalMonths; i++) {
+    if (remainingPrincipal <= 0) break;
+
+    const interest = remainingPrincipal * monthlyRate;
+    let payment: number;
+    let principalPart: number;
+
+    if (method === 'equal-principal-interest') {
+      payment = currentMonthlyPayment;
+      principalPart = payment - interest;
+      if (principalPart > remainingPrincipal) {
+        principalPart = remainingPrincipal;
+        payment = principalPart + interest;
+      }
+    } else {
+      principalPart = Math.min(currentFixedPrincipal, remainingPrincipal);
+      payment = principalPart + interest;
+    }
+
+    remainingPrincipal -= principalPart;
+    totalPayment += payment;
+
+    let prepaymentThisMonth = 0;
+    if (prepaymentMap.has(i) && remainingPrincipal > 0) {
+      prepaymentThisMonth = Math.min(prepaymentMap.get(i)!, remainingPrincipal);
+      remainingPrincipal -= prepaymentThisMonth;
+      totalPayment += prepaymentThisMonth;
+
+      const remainingMonths = totalMonths - i;
+      if (remainingMonths > 0 && remainingPrincipal > 0 && strategy === 'reduce-payment') {
+        if (method === 'equal-principal-interest') {
+          currentMonthlyPayment =
+            (remainingPrincipal * monthlyRate * Math.pow(1 + monthlyRate, remainingMonths)) /
+            (Math.pow(1 + monthlyRate, remainingMonths) - 1);
+          reducePaymentNewMonthly = currentMonthlyPayment;
+        } else {
+          currentFixedPrincipal = remainingPrincipal / remainingMonths;
+          reducePaymentNewMonthly = currentFixedPrincipal + remainingPrincipal * monthlyRate;
+        }
+      }
+    }
+
+    schedule.push({
+      month: i,
+      payment: payment + prepaymentThisMonth,
+      principal: principalPart + prepaymentThisMonth,
+      interest,
+      remainingPrincipal,
+    });
+
+    if (remainingPrincipal <= 0) break;
+  }
+
+  const totalInterest = totalPayment - principal;
+
+  let newMonthlyPayment: number;
+  if (strategy === 'shorten-term') {
+    newMonthlyPayment = originalFirstPayment;
+  } else {
+    newMonthlyPayment = reducePaymentNewMonthly > 0 ? reducePaymentNewMonthly : originalFirstPayment;
+  }
+
+  return { schedule, totalPayment, totalInterest, newMonthlyPayment };
+};
+
+const calcCombinedLoanWithPrepayments = (
+  params: LoanParams,
+  prepaymentEntries: PrepaymentEntry[],
+  strategy: PrepaymentStrategy,
+): { schedule: MonthlyPayment[]; totalPayment: number; totalInterest: number; newMonthlyPayment: number } => {
+  const { mode, method, years, commercialRate, providentRate } = params;
+
+  const commercialPrincipal = mode === 'commercial' || mode === 'combined' ? wanToYuan(params.commercialAmount) : 0;
+  const providentPrincipal = mode === 'provident' || mode === 'combined' ? wanToYuan(params.providentAmount) : 0;
+  const totalPrincipal = commercialPrincipal + providentPrincipal;
+  const commercialRatio = totalPrincipal > 0 ? commercialPrincipal / totalPrincipal : 0;
+  const providentRatio = totalPrincipal > 0 ? providentPrincipal / totalPrincipal : 0;
+
+  const validEntries = prepaymentEntries.filter(e => e.year > 0 && e.year < years && e.amount > 0);
+
+  const commercialPrepayments = validEntries.map(e => ({
+    month: e.year * 12,
+    amount: wanToYuan(e.amount) * commercialRatio,
+  }));
+
+  const providentPrepayments = validEntries.map(e => ({
+    month: e.year * 12,
+    amount: wanToYuan(e.amount) * providentRatio,
+  }));
+
+  let commercialSchedule: MonthlyPayment[] = [];
+  let providentSchedule: MonthlyPayment[] = [];
+  let commercialTotalPayment = 0;
+  let commercialTotalInterest = 0;
+  let providentTotalPayment = 0;
+  let providentTotalInterest = 0;
+  let commercialMonthlyPayment = 0;
+  let providentMonthlyPayment = 0;
+
+  if (mode === 'commercial' || mode === 'combined') {
+    const res = calcSingleLoanWithPrepayments(
+      commercialPrincipal,
+      commercialRate,
+      years,
+      method,
+      commercialPrepayments,
+      strategy,
+    );
+    commercialSchedule = res.schedule;
+    commercialTotalPayment = res.totalPayment;
+    commercialTotalInterest = res.totalInterest;
+    commercialMonthlyPayment = res.newMonthlyPayment;
+  }
+
+  if (mode === 'provident' || mode === 'combined') {
+    const res = calcSingleLoanWithPrepayments(
+      providentPrincipal,
+      providentRate,
+      years,
+      method,
+      providentPrepayments,
+      strategy,
+    );
+    providentSchedule = res.schedule;
+    providentTotalPayment = res.totalPayment;
+    providentTotalInterest = res.totalInterest;
+    providentMonthlyPayment = res.newMonthlyPayment;
+  }
+
+  let mergedSchedule: MonthlyPayment[];
+  if (mode === 'commercial') mergedSchedule = commercialSchedule;
+  else if (mode === 'provident') mergedSchedule = providentSchedule;
+  else mergedSchedule = mergeSchedules(commercialSchedule, providentSchedule);
+
+  return {
+    schedule: mergedSchedule,
+    totalPayment: commercialTotalPayment + providentTotalPayment,
+    totalInterest: commercialTotalInterest + providentTotalInterest,
+    newMonthlyPayment: commercialMonthlyPayment + providentMonthlyPayment,
+  };
+};
+
+export const calculatePrepayment = (
+  loanParams: LoanParams,
+  originalResult: CalculationResult,
+  prepaymentEntries: PrepaymentEntry[],
+): PrepaymentResult | null => {
+  if (!prepaymentEntries || prepaymentEntries.length === 0) return null;
+
+  const validEntries = prepaymentEntries.filter(e => e.year > 0 && e.year < loanParams.years && e.amount > 0);
+  if (validEntries.length === 0) return null;
+
+  const strategies: PrepaymentStrategy[] = ['shorten-term', 'reduce-payment'];
+  const strategyResults: PrepaymentStrategyResult[] = [];
+
+  for (const strategy of strategies) {
+    const res = calcCombinedLoanWithPrepayments(loanParams, validEntries, strategy);
+
+    strategyResults.push({
+      strategy,
+      strategyName: strategy === 'shorten-term' ? '缩短年限' : '减少月供',
+      totalPayment: res.totalPayment,
+      totalInterest: res.totalInterest,
+      savedInterest: originalResult.totalInterest - res.totalInterest,
+      newTermMonths: res.schedule.length,
+      newMonthlyPayment: res.newMonthlyPayment > 0 ? res.newMonthlyPayment : originalResult.monthlyPaymentFirst,
+      schedule: res.schedule,
+      yearlySchedule: buildYearlySchedule(res.schedule),
+    });
+  }
+
+  const recommendedStrategy = strategyResults[0].savedInterest >= strategyResults[1].savedInterest
+    ? 'shorten-term'
+    : 'reduce-payment';
+
+  return {
+    originalTotalPayment: originalResult.totalPayment,
+    originalTotalInterest: originalResult.totalInterest,
+    originalTermMonths: originalResult.schedule.length,
+    originalMonthlyPayment: originalResult.monthlyPaymentFirst,
+    strategies: strategyResults,
+    recommendedStrategy,
+  };
 };

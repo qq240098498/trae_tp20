@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { Calculator, TrendingDown, Clock, DollarSign, Plus, X, CheckCircle2, ArrowRight, Sparkles } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Calculator, TrendingDown, Clock, DollarSign, Plus, X, CheckCircle2, ArrowRight, Sparkles, Wallet, Target, TrendingUp } from 'lucide-react';
 import { useLoanStore } from '@/store/loanStore';
 import { formatCurrencyWan, formatCurrency } from '@/utils/format';
+import { calculateLoanRecommendation, findOptimalLoanTerm } from '@/utils/calculator';
 import type { PrepaymentEntry } from '@/types/loan';
 
 export default function PrepaymentSimulator() {
@@ -12,10 +13,33 @@ export default function PrepaymentSimulator() {
     setPrepaymentEntries,
     addPrepaymentEntry,
     removePrepaymentEntry,
+    setParams,
   } = useLoanStore();
 
   const [newYear, setNewYear] = useState<number>(3);
   const [newAmount, setNewAmount] = useState<number>(10);
+
+  const totalLoanAmount = useMemo(() => {
+    if (params.mode === 'commercial') return params.commercialAmount;
+    if (params.mode === 'provident') return params.providentAmount;
+    return params.commercialAmount + params.providentAmount;
+  }, [params]);
+
+  const currentRate = useMemo(() => {
+    if (params.mode === 'commercial') return params.commercialRate;
+    if (params.mode === 'provident') return params.providentRate;
+    const total = params.commercialAmount + params.providentAmount;
+    if (total === 0) return params.commercialRate;
+    return (params.commercialAmount * params.commercialRate + params.providentAmount * params.providentRate) / total;
+  }, [params]);
+
+  const recommendation = useMemo(() => {
+    return calculateLoanRecommendation(params.monthlySalary, currentRate, params.years, 0.5);
+  }, [params.monthlySalary, currentRate, params.years]);
+
+  const optimalTerm = useMemo(() => {
+    return findOptimalLoanTerm(params.monthlySalary, currentRate, totalLoanAmount, 0.5);
+  }, [params.monthlySalary, currentRate, totalLoanAmount]);
 
   const handleAddEntry = () => {
     if (newYear > 0 && newYear < params.years && newAmount > 0) {
@@ -62,6 +86,136 @@ export default function PrepaymentSimulator() {
       </div>
 
       <div className="p-6 space-y-6">
+        <div>
+          <label className="text-sm font-medium text-slate-700 mb-3 block flex items-center gap-1.5">
+            <Wallet className="w-4 h-4 text-purple-600" />
+            月薪设置
+          </label>
+          <div className="flex items-end gap-3">
+            <div className="flex-1">
+              <label className="text-xs text-slate-500 mb-1 block">月收入</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  value={params.monthlySalary || ''}
+                  onChange={(e) => setParams({ monthlySalary: parseInt(e.target.value) || 0 })}
+                  min={0}
+                  step={1000}
+                  placeholder="请输入月收入"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50/50 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-purple-500/40 focus:border-purple-500 focus:bg-white transition-all"
+                />
+                <div className="absolute inset-y-0 right-0 flex items-center pr-4 text-sm font-medium text-slate-500">
+                  元
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-dashed border-slate-200" />
+          </div>
+          <div className="relative flex justify-center">
+            <span className="px-4 bg-white text-xs font-medium text-slate-500">智能推荐</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="p-5 rounded-2xl bg-gradient-to-br from-purple-50 to-pink-50 ring-1 ring-purple-200/60">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="p-2 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 text-white">
+                <Target className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800">推荐贷款额度</h3>
+                <p className="text-xs text-slate-500">月供占月薪 50%</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-500">推荐总额度</span>
+                <span className="text-xl font-bold text-purple-600">
+                  {formatCurrencyWan(recommendation.recommendedAmount * 10000, 0)}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-500">每月还款</span>
+                <span className="text-sm font-semibold text-slate-700">
+                  {formatCurrency(recommendation.monthlyPayment)}元
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-500">总利息</span>
+                <span className="text-sm font-semibold text-amber-600">
+                  {formatCurrencyWan(recommendation.totalInterest, 0)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-5 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 ring-1 ring-emerald-200/60">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="p-2 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 text-white">
+                <TrendingUp className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800">推荐贷款期数</h3>
+                <p className="text-xs text-slate-500">基于当前贷款额度</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-500">推荐年限</span>
+                <span className="text-xl font-bold text-emerald-600">
+                  {optimalTerm.years}年
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-500">还款期数</span>
+                <span className="text-sm font-semibold text-slate-700">
+                  {optimalTerm.months}期
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-500">每月还款</span>
+                <span className={`text-sm font-semibold ${optimalTerm.isAffordable ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {formatCurrency(optimalTerm.monthlyPayment)}元
+                </span>
+              </div>
+            </div>
+            {!optimalTerm.isAffordable && (
+              <div className="mt-3 p-2.5 bg-red-50 rounded-lg text-xs text-red-600 flex items-start gap-1.5">
+                <span className="mt-0.5">⚠️</span>
+                <span>当前贷款额度超出月供承受能力，建议延长贷款年限或减少贷款额度</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl ring-1 ring-amber-200/60">
+          <div className="flex items-start gap-2">
+            <Sparkles className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm text-amber-800 font-medium">舒适贷款额度</p>
+              <p className="text-xs text-amber-600 mt-0.5">
+                月供占月薪 30%，生活更轻松：
+                <span className="font-bold ml-1">{formatCurrencyWan(recommendation.comfortableAmount * 10000, 0)}</span>
+                （月供约 {formatCurrency(recommendation.comfortableMonthlyPayment)}元）
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-dashed border-slate-200" />
+          </div>
+          <div className="relative flex justify-center">
+            <span className="px-4 bg-white text-xs font-medium text-slate-500">提前还款模拟</span>
+          </div>
+        </div>
+
         <div>
           <label className="text-sm font-medium text-slate-700 mb-3 block flex items-center gap-1.5">
             <Calculator className="w-4 h-4 text-purple-600" />

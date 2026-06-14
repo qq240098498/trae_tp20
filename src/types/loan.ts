@@ -3,6 +3,17 @@ export type RepaymentMethod = 'equal-principal-interest' | 'equal-principal';
 export type ScheduleView = 'yearly' | 'monthly';
 export type PrepaymentStrategy = 'shorten-term' | 'reduce-payment';
 
+export interface LoanRecommendation {
+  recommendedAmount: number;
+  comfortableAmount: number;
+  recommendedYears: number;
+  recommendedMonths: number;
+  monthlyPayment: number;
+  comfortableMonthlyPayment: number;
+  totalInterest: number;
+  salaryRatio: number;
+}
+
 export interface PrepaymentEntry {
   year: number;
   amount: number;
@@ -41,6 +52,7 @@ export interface LoanParams {
   providentRate: number;
   years: number;
   method: RepaymentMethod;
+  monthlySalary: number;
 }
 
 export interface MonthlyPayment {

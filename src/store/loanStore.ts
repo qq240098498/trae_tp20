@@ -28,6 +28,7 @@ const defaultParams: LoanParams = {
   providentRate: 2.85,
   years: 30,
   method: 'equal-principal-interest',
+  monthlySalary: 15000,
 };
 
 const initialResult = calculateLoan(defaultParams);

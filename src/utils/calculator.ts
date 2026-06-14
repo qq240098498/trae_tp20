@@ -8,6 +8,7 @@ import type {
   PrepaymentResult,
   PrepaymentStrategyResult,
   PrepaymentStrategy,
+  LoanRecommendation,
 } from '@/types/loan';
 import { wanToYuan } from './format';
 
@@ -425,5 +426,100 @@ export const calculatePrepayment = (
     originalMonthlyPayment: originalResult.monthlyPaymentFirst,
     strategies: strategyResults,
     recommendedStrategy,
+  };
+};
+
+export const calculateLoanRecommendation = (
+  monthlySalary: number,
+  annualRatePercent: number,
+  targetYears: number = 30,
+  salaryRatio: number = 0.5,
+): LoanRecommendation => {
+  if (monthlySalary <= 0 || annualRatePercent <= 0 || targetYears <= 0) {
+    return {
+      recommendedAmount: 0,
+      comfortableAmount: 0,
+      recommendedYears: 0,
+      recommendedMonths: 0,
+      monthlyPayment: 0,
+      comfortableMonthlyPayment: 0,
+      totalInterest: 0,
+      salaryRatio,
+    };
+  }
+
+  const monthlyRate = annualRatePercent / 100 / 12;
+  const totalMonths = targetYears * 12;
+  const maxMonthlyPayment = monthlySalary * salaryRatio;
+  const comfortableMonthlyPayment = monthlySalary * 0.3;
+
+  const calcPrincipal = (payment: number, months: number): number => {
+    if (monthlyRate === 0) return payment * months;
+    return (payment * (Math.pow(1 + monthlyRate, months) - 1)) /
+      (monthlyRate * Math.pow(1 + monthlyRate, months));
+  };
+
+  const recommendedPrincipal = calcPrincipal(maxMonthlyPayment, totalMonths);
+  const comfortablePrincipal = calcPrincipal(comfortableMonthlyPayment, totalMonths);
+
+  const recommendedAmount = recommendedPrincipal / 10000;
+  const comfortableAmount = comfortablePrincipal / 10000;
+
+  const totalPayment = maxMonthlyPayment * totalMonths;
+  const totalInterest = totalPayment - recommendedPrincipal;
+
+  return {
+    recommendedAmount,
+    comfortableAmount,
+    recommendedYears: targetYears,
+    recommendedMonths: totalMonths,
+    monthlyPayment: maxMonthlyPayment,
+    comfortableMonthlyPayment,
+    totalInterest,
+    salaryRatio,
+  };
+};
+
+export const findOptimalLoanTerm = (
+  monthlySalary: number,
+  annualRatePercent: number,
+  targetAmount: number,
+  salaryRatio: number = 0.5,
+): { years: number; months: number; monthlyPayment: number; isAffordable: boolean } => {
+  if (monthlySalary <= 0 || annualRatePercent <= 0 || targetAmount <= 0) {
+    return { years: 30, months: 360, monthlyPayment: 0, isAffordable: false };
+  }
+
+  const principal = wanToYuan(targetAmount);
+  const monthlyRate = annualRatePercent / 100 / 12;
+  const maxPayment = monthlySalary * salaryRatio;
+
+  const calcPayment = (months: number): number => {
+    if (monthlyRate === 0) return principal / months;
+    return (principal * monthlyRate * Math.pow(1 + monthlyRate, months)) /
+      (Math.pow(1 + monthlyRate, months) - 1);
+  };
+
+  let bestMonths = 360;
+  let bestPayment = calcPayment(360);
+
+  if (bestPayment <= maxPayment) {
+    for (let months = 12; months <= 360; months += 12) {
+      const payment = calcPayment(months);
+      if (payment <= maxPayment) {
+        bestMonths = months;
+        bestPayment = payment;
+        break;
+      }
+    }
+  }
+
+  const isAffordable = bestPayment <= maxPayment;
+
+  return {
+    years: Math.ceil(bestMonths / 12),
+    months: bestMonths,
+    monthlyPayment: bestPayment,
+    isAffordable,
   };
 };
